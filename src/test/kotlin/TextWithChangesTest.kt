@@ -155,6 +155,79 @@ class TextWithChangesTest {
     }
 
     @Nested
+    inner class CountLineBreaks {
+        @Test
+        fun unchangedWholeString() {
+            val formatter = TextWithChanges("a\nb\nc")
+
+            assertEquals(2, formatter.countLineBreaks(RangeInResult(PositionInResult.Unchanged(0u), PositionInResult.Unchanged(5u))))
+        }
+
+        @Test
+        fun emptyString() {
+            val formatter = TextWithChanges("")
+
+            assertEquals(0, formatter.countLineBreaks(RangeInResult(PositionInResult.Unchanged(0u), PositionInResult.Unchanged(0u))))
+        }
+
+        @Test
+        fun noNewLines() {
+            val formatter = TextWithChanges("a")
+
+            assertEquals(0, formatter.countLineBreaks(RangeInResult(PositionInResult.Unchanged(0u), PositionInResult.Unchanged(1u))))
+        }
+
+        @Test
+        fun inSubstrings() {
+            val formatter = TextWithChanges("a\n")
+
+            assertEquals(0, formatter.countLineBreaks(RangeInResult(PositionInResult.Unchanged(0u), PositionInResult.Unchanged(1u))))
+            assertEquals(1, formatter.countLineBreaks(RangeInResult(PositionInResult.Unchanged(1u), PositionInResult.Unchanged(2u))))
+        }
+
+        @Test
+        fun countsLineInChanges() {
+            val formatter = TextWithChanges("a\nb\nc")
+            formatter.addChange(RangeInResult(PositionInResult.Unchanged(1u), PositionInResult.Unchanged(2u)), "\n\n")
+
+            assertEquals(3, formatter.countLineBreaks(RangeInResult(PositionInResult.Unchanged(0u), PositionInResult.Unchanged(5u))))
+        }
+
+        @Test
+        fun startingFromChange() {
+            val formatter = TextWithChanges(" \nb\nc")
+            val change = formatter.addChange(RangeInResult(PositionInResult.Unchanged(0u), PositionInResult.Unchanged(2u)), "\r\n ")
+
+            assertEquals(
+                0,
+                formatter.countLineBreaks(RangeInResult(PositionInResult.Changed(change, 2u), PositionInResult.Unchanged(3u))),
+            )
+        }
+
+        @Test
+        fun endingInChange() {
+            val formatter = TextWithChanges("aa\n\nb\nc")
+            val change = formatter.addChange(RangeInResult(PositionInResult.Unchanged(2u), PositionInResult.Unchanged(4u)), "\n")
+
+            assertEquals(
+                1,
+                formatter.countLineBreaks(RangeInResult(PositionInResult.Unchanged(1u), PositionInResult.Changed(change, 1u))),
+            )
+        }
+
+        @Test
+        fun startAndEndInSameChange() {
+            val formatter = TextWithChanges("a\nb\nc")
+            val change = formatter.addChange(RangeInResult(PositionInResult.Unchanged(1u), PositionInResult.Unchanged(2u)), "\n\n")
+
+            assertEquals(
+                1,
+                formatter.countLineBreaks(RangeInResult(PositionInResult.Changed(change, 1u), PositionInResult.Changed(change, 2u))),
+            )
+        }
+    }
+
+    @Nested
     inner class ApplyChanges {
         @Test
         fun returnsSourceStringForNoChanges() {

@@ -23,7 +23,11 @@ data class FormattingReplacement(val text: String) {
 }
 
 // Represents the replacement of some range in source text.
-data class TextChange(val range: TextRange, val replacement: FormattingReplacement)
+data class TextChange(val range: TextRange, val replacement: FormattingReplacement) {
+    companion object {
+        fun dummy(offset: UInt): TextChange = TextChange(TextRange(offset, offset), FormattingReplacement(""))
+    }
+}
 
 sealed class PositionInResult {
     data class Unchanged(val offset: UInt) : PositionInResult()
@@ -41,7 +45,7 @@ class TextWithChanges(private val source: String) {
     // we maintain an invariant that ranges do not intersect/touch each other
     private val changes = TreeSet<TextChange> { a, b -> a.range.start.compareTo(b.range.start) }
 
-    // TODO: could handle checking if we are actually changing anything
+    // NOTE: could handle checking if we are actually changing anything
     fun addChange(
         range: RangeInResult,
         text: String,
@@ -54,13 +58,7 @@ class TextWithChanges(private val source: String) {
             when (position) {
                 is PositionInResult.Changed -> position
                 is PositionInResult.Unchanged -> {
-                    val glb =
-                        changes.floor(
-                            TextChange(
-                                TextRange(position.offset, position.offset),
-                                FormattingReplacement(""),
-                            ),
-                        )
+                    val glb = changes.floor(TextChange.dummy(position.offset))
 
                     if (glb != null && glb.range.start == position.offset) {
                         PositionInResult.Changed(glb, 0u)
@@ -174,6 +172,65 @@ class TextWithChanges(private val source: String) {
                 }
         }
     }
+
+    fun countLineBreaks(range: RangeInResult): Int {
+        // NOTE: could be done more efficiently
+        fun String.countLineBreaks(): Int = this.splitToSequence("\r\n", "\n").count() - 1
+
+        var count = 0
+
+        var current =
+            when (range.start) {
+                is PositionInResult.Changed -> {
+                    when (range.end) {
+                        is PositionInResult.Changed -> {
+                            if (range.start.change == range.end.change) {
+                                count +=
+                                    range.start.change.replacement.text.substring(
+                                        range.start.offset.toInt(),
+                                        range.end.offset.toInt(),
+                                    ).countLineBreaks()
+                                return count
+                            }
+                        }
+                        is PositionInResult.Unchanged -> {}
+                    }
+
+                    count += range.start.change.replacement.text.substring(range.start.offset.toInt()).countLineBreaks()
+                    range.start.change.range.end
+                }
+                is PositionInResult.Unchanged -> range.start.offset
+            }
+        // assuming `range` is correctly provided, this terminates
+        // NOTE: this could be handled better (by upper bounding by the amount of changes)
+        while (true) {
+            val nextChange = changes.higher(TextChange.dummy(current))
+
+            when (range.end) {
+                is PositionInResult.Changed -> {
+                    // nextChange should not be null here since end is a change
+                    count += source.substring(current.toInt(), nextChange!!.range.start.toInt()).countLineBreaks()
+
+                    if (nextChange == range.end.change) {
+                        count += nextChange.replacement.text.substring(0, range.end.offset.toInt()).countLineBreaks()
+                        return count
+                    }
+                }
+                is PositionInResult.Unchanged -> {
+                    if (nextChange == null || nextChange.range.start > range.end.offset) {
+                        count += source.substring(current.toInt(), range.end.offset.toInt()).countLineBreaks()
+                        return count
+                    } else {
+                        count += source.substring(current.toInt(), nextChange.range.start.toInt()).countLineBreaks()
+                    }
+                }
+            }
+
+            count += nextChange.replacement.text.countLineBreaks()
+            current = nextChange.range.end
+        }
+    }
+
 
     fun applyChanges(): String {
         val result = StringBuilder()
