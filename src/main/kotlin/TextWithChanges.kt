@@ -4,7 +4,9 @@ import java.util.TreeSet
 
 // There already is such a method on chars, but it handles a more broad range of whitespace chars,
 // so here we specialize to what the assignment wanted.
-fun String.isWhitespace(): Boolean = all { it == ' ' || it == '\t' || it == '\r' || it == '\n' }
+fun Char.isWhitespace(): Boolean = this == ' ' || this == '\t' || this == '\r' || this == '\n'
+
+fun String.isWhitespace(): Boolean = all { it.isWhitespace() }
 
 // Represents a range in some text with an inclusive start and exclusive end.
 data class TextRange(val start: UInt, val end: UInt) {
@@ -173,11 +175,67 @@ class TextWithChanges(private val source: String) {
         }
     }
 
+    enum class SearchKind { NON_WHITESPACE, LINE_BREAK, BOTH }
+
+    enum class SearchDirection { FRONT_TO_BACK, BACK_TO_FRONT }
+
+    enum class FoundObjectKind { NON_WHITESPACE, LINE_BREAK }
+
+    data class SearchResult(val position: PositionInResult, val objectKind: FoundObjectKind)
+
+    fun search(
+        range: RangeInResult,
+        direction: SearchDirection,
+        whatToSearch: SearchKind,
+    ): SearchResult? {
+        val matchNonWhitespace = { c: Char -> if (!c.isWhitespace()) FoundObjectKind.NON_WHITESPACE else null }
+        val matchLineBreak = { c: Char -> if (c == '\n' || c == '\r') FoundObjectKind.LINE_BREAK else null }
+        val matchBoth = { c: Char -> matchNonWhitespace(c) ?: matchLineBreak(c) }
+
+        val matcher =
+            when (whatToSearch) {
+                SearchKind.NON_WHITESPACE -> matchNonWhitespace
+                SearchKind.LINE_BREAK -> matchLineBreak
+                SearchKind.BOTH -> matchBoth
+            }
+
+        fun computePosition(
+            offset: UInt,
+            baseOffset: PositionInResult,
+        ): PositionInResult =
+            when (baseOffset) {
+                is PositionInResult.Changed -> baseOffset.copy(offset = baseOffset.offset + offset)
+                is PositionInResult.Unchanged -> baseOffset.copy(offset = baseOffset.offset + offset)
+            }
+
+        val result =
+            when (direction) {
+                SearchDirection.FRONT_TO_BACK ->
+                    segmentsInRange(range).map {
+                        it.text.mapIndexed { i, c -> i.toUInt() to matcher(c) }.find { (_, v) -> v != null }?.let { (i, v) ->
+                            computePosition(i, it.baseOffset) to v!!
+                        }
+                    }
+                // ugh-oh, back-to-front is done eagerly. segmentsInRange could be improved to accommodate both directions
+                SearchDirection.BACK_TO_FRONT ->
+                    segmentsInRange(range).toMutableList().also { it.reversed() }.map {
+                        it.text.mapIndexed { i, c -> i.toUInt() to matcher(c) }.findLast { (_, v) -> v != null }?.let { (i, v) ->
+                            computePosition(i, it.baseOffset) to v!!
+                        }
+                    }.asSequence()
+            }
+                .firstNotNullOfOrNull { it }
+
+        return result?.let {
+            SearchResult(it.first, it.second)
+        }
+    }
+
     fun countLineBreaks(range: RangeInResult): Int {
         // NOTE: could be done more efficiently, ie without creating intermediate strings
         fun String.countLineBreaks(): Int = this.splitToSequence("\r\n", "\n", "\r").count() - 1
 
-        return segmentsInRange(range).sumOf { it.countLineBreaks() }
+        return segmentsInRange(range).sumOf { it.text.countLineBreaks() }
     }
 
     data class SimpleSpacesCount(val spaces: Int, val tabs: Int, val visualSpace: Int)
@@ -193,7 +251,7 @@ class TextWithChanges(private val source: String) {
         // we assume that we start at zero, ie the first column
         var lineOffset = 0
 
-        for (segment in segmentsInRange(range)) {
+        for (segment in segmentsInRange(range).map { it.text }) {
             for (char in segment) {
                 when (char) {
                     ' ' -> {
@@ -231,7 +289,9 @@ class TextWithChanges(private val source: String) {
         return result.toString()
     }
 
-    private fun segmentsInRange(range: RangeInResult): Sequence<String> =
+    data class Segment(val text: String, val baseOffset: PositionInResult)
+
+    private fun segmentsInRange(range: RangeInResult): Sequence<Segment> =
         sequence {
             var current =
                 when (range.start) {
@@ -240,9 +300,12 @@ class TextWithChanges(private val source: String) {
                             is PositionInResult.Changed -> {
                                 if (range.start.change == range.end.change) {
                                     yield(
-                                        range.start.change.replacement.text.substring(
-                                            range.start.offset.toInt(),
-                                            range.end.offset.toInt(),
+                                        Segment(
+                                            range.start.change.replacement.text.substring(
+                                                range.start.offset.toInt(),
+                                                range.end.offset.toInt(),
+                                            ),
+                                            PositionInResult.Changed(range.start.change, range.start.offset),
                                         ),
                                     )
                                     return@sequence
@@ -251,7 +314,12 @@ class TextWithChanges(private val source: String) {
                             is PositionInResult.Unchanged -> {}
                         }
 
-                        yield(range.start.change.replacement.text.substring(range.start.offset.toInt()))
+                        yield(
+                            Segment(
+                                range.start.change.replacement.text.substring(range.start.offset.toInt()),
+                                PositionInResult.Changed(range.start.change, range.start.offset),
+                            ),
+                        )
                         range.start.change.range.end
                     }
                     is PositionInResult.Unchanged -> range.start.offset
@@ -264,24 +332,39 @@ class TextWithChanges(private val source: String) {
                 when (range.end) {
                     is PositionInResult.Changed -> {
                         // nextChange should not be null here since end is a change
-                        yield(source.substring(current.toInt(), nextChange!!.range.start.toInt()))
+                        yield(
+                            Segment(
+                                source.substring(current.toInt(), nextChange!!.range.start.toInt()),
+                                PositionInResult.Unchanged(current),
+                            ),
+                        )
 
                         if (nextChange == range.end.change) {
-                            yield(nextChange.replacement.text.substring(0, range.end.offset.toInt()))
+                            yield(
+                                Segment(
+                                    nextChange.replacement.text.substring(0, range.end.offset.toInt()),
+                                    PositionInResult.Changed(nextChange, 0u),
+                                ),
+                            )
                             return@sequence
                         }
                     }
                     is PositionInResult.Unchanged -> {
                         if (nextChange == null || nextChange.range.start > range.end.offset) {
-                            yield(source.substring(current.toInt(), range.end.offset.toInt()))
+                            yield(Segment(source.substring(current.toInt(), range.end.offset.toInt()), PositionInResult.Unchanged(current)))
                             return@sequence
                         } else {
-                            yield(source.substring(current.toInt(), nextChange.range.start.toInt()))
+                            yield(
+                                Segment(
+                                    source.substring(current.toInt(), nextChange.range.start.toInt()),
+                                    PositionInResult.Unchanged(current),
+                                ),
+                            )
                         }
                     }
                 }
 
-                yield(nextChange.replacement.text)
+                yield(Segment(nextChange.replacement.text, PositionInResult.Changed(nextChange, 0u)))
                 current = nextChange.range.end
             }
         }

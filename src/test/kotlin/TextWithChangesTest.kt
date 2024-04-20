@@ -284,6 +284,82 @@ class TextWithChangesTest {
     }
 
     @Nested
+    inner class Search {
+        @Test
+        fun findsInSingleChange() {
+            val formatter = TextWithChanges("a\n\n\nc")
+            val change = formatter.addChange(RangeInResult(PositionInResult.Unchanged(1u), PositionInResult.Unchanged(4u)), "  \n\n")
+
+            assertEquals(
+                TextWithChanges.SearchResult(PositionInResult.Changed(change, 2u), TextWithChanges.FoundObjectKind.LINE_BREAK),
+                formatter.search(
+                    RangeInResult(PositionInResult.Unchanged(0u), PositionInResult.Unchanged(5u)),
+                    TextWithChanges.SearchDirection.FRONT_TO_BACK,
+                    TextWithChanges.SearchKind.LINE_BREAK,
+                ),
+            )
+        }
+
+        @Test
+        fun findsInSource() {
+            val formatter = TextWithChanges("\n\n\n\n\n\nc")
+            formatter.addChange(RangeInResult(PositionInResult.Unchanged(1u), PositionInResult.Unchanged(4u)), "  ")
+
+            assertEquals(
+                TextWithChanges.SearchResult(PositionInResult.Unchanged(6u), TextWithChanges.FoundObjectKind.NON_WHITESPACE),
+                formatter.search(
+                    RangeInResult(PositionInResult.Unchanged(0u), PositionInResult.Unchanged(7u)),
+                    TextWithChanges.SearchDirection.FRONT_TO_BACK,
+                    TextWithChanges.SearchKind.NON_WHITESPACE,
+                ),
+            )
+        }
+
+        @Test
+        fun doesNotFindOutsideOfRange() {
+            val formatter = TextWithChanges("\n\n\n\n\n\nc")
+            formatter.addChange(RangeInResult(PositionInResult.Unchanged(1u), PositionInResult.Unchanged(4u)), "  ")
+
+            assertEquals(
+                null,
+                formatter.search(
+                    RangeInResult(PositionInResult.Unchanged(0u), PositionInResult.Unchanged(6u)),
+                    TextWithChanges.SearchDirection.FRONT_TO_BACK,
+                    TextWithChanges.SearchKind.NON_WHITESPACE,
+                ),
+            )
+        }
+
+        @Test
+        fun bothFindsFirst() {
+            val formatter = TextWithChanges("a  a\n")
+
+            assertEquals(
+                TextWithChanges.SearchResult(PositionInResult.Unchanged(3u), TextWithChanges.FoundObjectKind.NON_WHITESPACE),
+                formatter.search(
+                    RangeInResult(PositionInResult.Unchanged(1u), PositionInResult.Unchanged(4u)),
+                    TextWithChanges.SearchDirection.FRONT_TO_BACK,
+                    TextWithChanges.SearchKind.BOTH,
+                ),
+            )
+        }
+
+        @Test
+        fun backToFrontFindsLast() {
+            val formatter = TextWithChanges("a\n  a")
+
+            assertEquals(
+                TextWithChanges.SearchResult(PositionInResult.Unchanged(1u), TextWithChanges.FoundObjectKind.LINE_BREAK),
+                formatter.search(
+                    RangeInResult(PositionInResult.Unchanged(0u), PositionInResult.Unchanged(3u)),
+                    TextWithChanges.SearchDirection.BACK_TO_FRONT,
+                    TextWithChanges.SearchKind.BOTH,
+                ),
+            )
+        }
+    }
+
+    @Nested
     inner class ApplyChanges {
         @Test
         fun returnsSourceStringForNoChanges() {
