@@ -228,6 +228,62 @@ class TextWithChangesTest {
     }
 
     @Nested
+    inner class CountSimpleSpaces {
+        @Test
+        fun noChanges() {
+            val formatter = TextWithChanges(" a\nb\nc")
+
+            assertEquals(
+                TextWithChanges.SimpleSpacesCount(1, 0, 4),
+                formatter.countSimpleSpaces(RangeInResult(PositionInResult.Unchanged(0u), PositionInResult.Unchanged(6u)), 1000),
+            )
+        }
+
+        @Test
+        fun visualSpaceForTabs() {
+            val source = "\t\na\t\naa\t\naaa\t\naaaa\t"
+            val formatter = TextWithChanges(source)
+
+            assertEquals(
+                TextWithChanges.SimpleSpacesCount(0, 5, 24),
+                formatter.countSimpleSpaces(
+                    RangeInResult(PositionInResult.Unchanged(0u), PositionInResult.Unchanged(source.length.toUInt())),
+                    4,
+                ),
+            )
+        }
+
+        @Test
+        fun visualSpaceForTabsWithCRLF() {
+            val source = "\t\na\t\r\naa\t\naaa\t\r\naaaa\t"
+            val formatter = TextWithChanges(source)
+
+            assertEquals(
+                TextWithChanges.SimpleSpacesCount(0, 5, 24),
+                formatter.countSimpleSpaces(
+                    RangeInResult(PositionInResult.Unchanged(0u), PositionInResult.Unchanged(source.length.toUInt())),
+                    4,
+                ),
+            )
+        }
+
+        @Test
+        fun visualSpaceForTabsWithChanges() {
+            val source = "\t\na\t\naa\t\naaa\t\naaaa\t"
+            val formatter = TextWithChanges(source)
+            formatter.addChange(RangeInResult(PositionInResult.Unchanged(1u), PositionInResult.Unchanged(1u)), "\n \n")
+
+            assertEquals(
+                TextWithChanges.SimpleSpacesCount(1, 5, 25),
+                formatter.countSimpleSpaces(
+                    RangeInResult(PositionInResult.Unchanged(0u), PositionInResult.Unchanged(source.length.toUInt())),
+                    4,
+                ),
+            )
+        }
+    }
+
+    @Nested
     inner class ApplyChanges {
         @Test
         fun returnsSourceStringForNoChanges() {

@@ -174,63 +174,50 @@ class TextWithChanges(private val source: String) {
     }
 
     fun countLineBreaks(range: RangeInResult): Int {
-        // NOTE: could be done more efficiently
-        fun String.countLineBreaks(): Int = this.splitToSequence("\r\n", "\n").count() - 1
+        // NOTE: could be done more efficiently, ie without creating intermediate strings
+        fun String.countLineBreaks(): Int = this.splitToSequence("\r\n", "\n", "\r").count() - 1
 
-        var count = 0
-
-        var current =
-            when (range.start) {
-                is PositionInResult.Changed -> {
-                    when (range.end) {
-                        is PositionInResult.Changed -> {
-                            if (range.start.change == range.end.change) {
-                                count +=
-                                    range.start.change.replacement.text.substring(
-                                        range.start.offset.toInt(),
-                                        range.end.offset.toInt(),
-                                    ).countLineBreaks()
-                                return count
-                            }
-                        }
-                        is PositionInResult.Unchanged -> {}
-                    }
-
-                    count += range.start.change.replacement.text.substring(range.start.offset.toInt()).countLineBreaks()
-                    range.start.change.range.end
-                }
-                is PositionInResult.Unchanged -> range.start.offset
-            }
-        // assuming `range` is correctly provided, this terminates
-        // NOTE: this could be handled better (by upper bounding by the amount of changes)
-        while (true) {
-            val nextChange = changes.higher(TextChange.dummy(current))
-
-            when (range.end) {
-                is PositionInResult.Changed -> {
-                    // nextChange should not be null here since end is a change
-                    count += source.substring(current.toInt(), nextChange!!.range.start.toInt()).countLineBreaks()
-
-                    if (nextChange == range.end.change) {
-                        count += nextChange.replacement.text.substring(0, range.end.offset.toInt()).countLineBreaks()
-                        return count
-                    }
-                }
-                is PositionInResult.Unchanged -> {
-                    if (nextChange == null || nextChange.range.start > range.end.offset) {
-                        count += source.substring(current.toInt(), range.end.offset.toInt()).countLineBreaks()
-                        return count
-                    } else {
-                        count += source.substring(current.toInt(), nextChange.range.start.toInt()).countLineBreaks()
-                    }
-                }
-            }
-
-            count += nextChange.replacement.text.countLineBreaks()
-            current = nextChange.range.end
-        }
+        return segmentsInRange(range).sumOf { it.countLineBreaks() }
     }
 
+    data class SimpleSpacesCount(val spaces: Int, val tabs: Int, val visualSpace: Int)
+
+    fun countSimpleSpaces(
+        range: RangeInResult,
+        tabWidth: Int,
+    ): SimpleSpacesCount {
+        var spaces = 0
+        var tabs = 0
+        var visualSpace = 0
+
+        // we assume that we start at zero, ie the first column
+        var lineOffset = 0
+
+        for (segment in segmentsInRange(range)) {
+            for (char in segment) {
+                when (char) {
+                    ' ' -> {
+                        spaces += 1
+                        visualSpace += 1
+                        lineOffset += 1
+                    }
+                    '\t' -> {
+                        tabs += 1
+                        val fillSpace = tabWidth - (lineOffset % tabWidth)
+                        visualSpace += fillSpace
+                        lineOffset += fillSpace
+                    }
+                    '\r', '\n' -> lineOffset = 0
+                    else -> {
+                        lineOffset += 1
+                        visualSpace += 1
+                    }
+                }
+            }
+        }
+
+        return SimpleSpacesCount(spaces, tabs, visualSpace)
+    }
 
     fun applyChanges(): String {
         val result = StringBuilder()
@@ -243,4 +230,59 @@ class TextWithChanges(private val source: String) {
         result.append(source.substring(currentOffset))
         return result.toString()
     }
+
+    private fun segmentsInRange(range: RangeInResult): Sequence<String> =
+        sequence {
+            var current =
+                when (range.start) {
+                    is PositionInResult.Changed -> {
+                        when (range.end) {
+                            is PositionInResult.Changed -> {
+                                if (range.start.change == range.end.change) {
+                                    yield(
+                                        range.start.change.replacement.text.substring(
+                                            range.start.offset.toInt(),
+                                            range.end.offset.toInt(),
+                                        ),
+                                    )
+                                    return@sequence
+                                }
+                            }
+                            is PositionInResult.Unchanged -> {}
+                        }
+
+                        yield(range.start.change.replacement.text.substring(range.start.offset.toInt()))
+                        range.start.change.range.end
+                    }
+                    is PositionInResult.Unchanged -> range.start.offset
+                }
+            // assuming `range` is correctly provided, this terminates
+            // NOTE: this could be handled better (by upper bounding by the amount of changes)
+            while (true) {
+                val nextChange = changes.higher(TextChange.dummy(current))
+
+                when (range.end) {
+                    is PositionInResult.Changed -> {
+                        // nextChange should not be null here since end is a change
+                        yield(source.substring(current.toInt(), nextChange!!.range.start.toInt()))
+
+                        if (nextChange == range.end.change) {
+                            yield(nextChange.replacement.text.substring(0, range.end.offset.toInt()))
+                            return@sequence
+                        }
+                    }
+                    is PositionInResult.Unchanged -> {
+                        if (nextChange == null || nextChange.range.start > range.end.offset) {
+                            yield(source.substring(current.toInt(), range.end.offset.toInt()))
+                            return@sequence
+                        } else {
+                            yield(source.substring(current.toInt(), nextChange.range.start.toInt()))
+                        }
+                    }
+                }
+
+                yield(nextChange.replacement.text)
+                current = nextChange.range.end
+            }
+        }
 }
