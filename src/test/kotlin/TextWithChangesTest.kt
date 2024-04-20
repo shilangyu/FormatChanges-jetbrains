@@ -1,13 +1,157 @@
+import org.example.FormattingReplacement
 import org.example.PositionInResult
 import org.example.RangeInResult
+import org.example.TextChange
+import org.example.TextRange
 import org.example.TextWithChanges
 import org.junit.jupiter.api.Nested
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.assertThrows
 import kotlin.test.assertEquals
 
 class TextWithChangesTest {
-    @Test
-    fun addChange() {
+    @Nested
+    inner class AddChange {
+        @Test
+        fun cannotEditNonWhitespace() {
+            val formatter = TextWithChanges("abc efg")
+
+            assertThrows<AssertionError> {
+                formatter.addChange(RangeInResult(PositionInResult.Unchanged(3u), PositionInResult.Unchanged(5u)), "")
+            }
+        }
+
+        @Test
+        fun normalizesStartPositions() {
+            val formatter = TextWithChanges("while( true){foo( );}")
+            val change = formatter.addChange(RangeInResult(PositionInResult.Unchanged(6u), PositionInResult.Unchanged(7u)), "")
+            formatter.addChange(RangeInResult(PositionInResult.Unchanged(6u), PositionInResult.Changed(change, 0u)), "\n ")
+
+            assertEquals("while(\n true){foo( );}", formatter.applyChanges())
+        }
+
+        @Test
+        fun normalizesEndPositions() {
+            val formatter = TextWithChanges("while( true){foo( );}")
+            val change = formatter.addChange(RangeInResult(PositionInResult.Unchanged(6u), PositionInResult.Unchanged(7u)), "")
+            formatter.addChange(RangeInResult(PositionInResult.Changed(change, 0u), PositionInResult.Unchanged(7u)), "\n ")
+
+            assertEquals("while(\n true){foo( );}", formatter.applyChanges())
+        }
+
+        @Test
+        fun cannotIntroduceNonWhitespace() {
+            val formatter = TextWithChanges("")
+
+            assertThrows<AssertionError> {
+                formatter.addChange(RangeInResult(PositionInResult.Unchanged(0u), PositionInResult.Unchanged(0u)), "whoops")
+            }
+        }
+
+        @Test
+        fun cannotIntersectAChange() {
+            val formatter = TextWithChanges("  ")
+
+            formatter.addChange(RangeInResult(PositionInResult.Unchanged(0u), PositionInResult.Unchanged(1u)), "  ")
+
+            assertThrows<AssertionError> {
+                formatter.addChange(RangeInResult(PositionInResult.Unchanged(0u), PositionInResult.Unchanged(2u)), " ")
+            }
+        }
+
+        @Test
+        fun newChangeWithSameRangeOverrides() {
+            val formatter = TextWithChanges("  ")
+
+            formatter.addChange(RangeInResult(PositionInResult.Unchanged(0u), PositionInResult.Unchanged(1u)), "  ")
+            val change = formatter.addChange(RangeInResult(PositionInResult.Unchanged(0u), PositionInResult.Unchanged(1u)), "\t")
+
+            assertEquals(TextChange(TextRange(0u, 1u), FormattingReplacement("\t")), change)
+            assertEquals("\t ", formatter.applyChanges())
+        }
+
+        @Test
+        fun newChangeWithIncludingRangeAlters() {
+            val formatter = TextWithChanges("   ")
+
+            val change1 = formatter.addChange(RangeInResult(PositionInResult.Unchanged(0u), PositionInResult.Unchanged(2u)), "\r\t\r")
+            val change2 =
+                formatter.addChange(
+                    RangeInResult(PositionInResult.Changed(change1, 1u), PositionInResult.Changed(change1, 2u)),
+                    "\r",
+                )
+
+            assertEquals(TextChange(TextRange(0u, 2u), FormattingReplacement("\r\r\r")), change2)
+            assertEquals("\r\r\r ", formatter.applyChanges())
+        }
+
+        @Test
+        fun cannotMergeEditNonWhitespaceLeft() {
+            val formatter = TextWithChanges("a  b")
+
+            formatter.addChange(RangeInResult(PositionInResult.Unchanged(1u), PositionInResult.Unchanged(2u)), "\n")
+
+            assertThrows<AssertionError> {
+                formatter.addChange(RangeInResult(PositionInResult.Unchanged(2u), PositionInResult.Unchanged(4u)), "\t")
+            }
+        }
+
+        @Test
+        fun newChangeTouchingToTheLeftIsMerged() {
+            val formatter = TextWithChanges("a  b")
+
+            formatter.addChange(RangeInResult(PositionInResult.Unchanged(1u), PositionInResult.Unchanged(2u)), "\n")
+            val change = formatter.addChange(RangeInResult(PositionInResult.Unchanged(2u), PositionInResult.Unchanged(3u)), "\t")
+
+            assertEquals(TextChange(TextRange(1u, 3u), FormattingReplacement("\n\t")), change)
+            assertEquals("a\n\tb", formatter.applyChanges())
+        }
+
+        @Test
+        fun cannotMergeEditNonWhitespaceRight() {
+            val formatter = TextWithChanges("a  b")
+
+            formatter.addChange(RangeInResult(PositionInResult.Unchanged(2u), PositionInResult.Unchanged(3u)), "\n")
+
+            assertThrows<AssertionError> {
+                formatter.addChange(RangeInResult(PositionInResult.Unchanged(0u), PositionInResult.Unchanged(2u)), "\t")
+            }
+        }
+
+        @Test
+        fun newChangeTouchingToTheRightIsMerged() {
+            val formatter = TextWithChanges("a  b")
+
+            formatter.addChange(RangeInResult(PositionInResult.Unchanged(2u), PositionInResult.Unchanged(3u)), "\n")
+            val change = formatter.addChange(RangeInResult(PositionInResult.Unchanged(1u), PositionInResult.Unchanged(2u)), "\t")
+
+            assertEquals(TextChange(TextRange(1u, 3u), FormattingReplacement("\t\n")), change)
+            assertEquals("a\t\nb", formatter.applyChanges())
+        }
+
+        @Test
+        fun mergingChangeWithEmpty() {
+            val formatter = TextWithChanges("a  b")
+
+            formatter.addChange(RangeInResult(PositionInResult.Unchanged(2u), PositionInResult.Unchanged(2u)), "\n")
+            val change = formatter.addChange(RangeInResult(PositionInResult.Unchanged(1u), PositionInResult.Unchanged(2u)), "\t")
+
+            assertEquals(TextChange(TextRange(1u, 2u), FormattingReplacement("\t\n")), change)
+            assertEquals("a\t\n b", formatter.applyChanges())
+        }
+
+        @Test
+        fun mergingFromBothSides() {
+            val formatter = TextWithChanges("a   b")
+
+            formatter.addChange(RangeInResult(PositionInResult.Unchanged(1u), PositionInResult.Unchanged(2u)), "\n")
+            formatter.addChange(RangeInResult(PositionInResult.Unchanged(3u), PositionInResult.Unchanged(4u)), "\n")
+
+            val change = formatter.addChange(RangeInResult(PositionInResult.Unchanged(2u), PositionInResult.Unchanged(3u)), "\t")
+
+            assertEquals(TextChange(TextRange(1u, 4u), FormattingReplacement("\n\t\n")), change)
+            assertEquals("a\n\t\nb", formatter.applyChanges())
+        }
     }
 
     @Nested
@@ -17,7 +161,7 @@ class TextWithChangesTest {
             val source = "while( true){foo( );}"
             val formatter = TextWithChanges(source)
 
-            assertEquals(formatter.applyChanges(), source)
+            assertEquals(source, formatter.applyChanges())
         }
 
         @Test
@@ -25,7 +169,7 @@ class TextWithChangesTest {
             val formatter = TextWithChanges("while( true){foo( );}")
             formatter.addChange(RangeInResult(PositionInResult.Unchanged(6u), PositionInResult.Unchanged(7u)), "")
 
-            assertEquals(formatter.applyChanges(), "while(true){foo( );}")
+            assertEquals("while(true){foo( );}", formatter.applyChanges())
         }
 
         @Test
@@ -33,7 +177,7 @@ class TextWithChangesTest {
             val formatter = TextWithChanges("while( true){foo( );}")
             formatter.addChange(RangeInResult(PositionInResult.Unchanged(13u), PositionInResult.Unchanged(13u)), "\n\t")
 
-            assertEquals(formatter.applyChanges(), "while( true){\n\tfoo( );}")
+            assertEquals("while( true){\n\tfoo( );}", formatter.applyChanges())
         }
 
         @Test
@@ -41,7 +185,7 @@ class TextWithChangesTest {
             val formatter = TextWithChanges("while(true) { foo( );}")
             formatter.addChange(RangeInResult(PositionInResult.Unchanged(13u), PositionInResult.Unchanged(14u)), "    ")
 
-            assertEquals(formatter.applyChanges(), "while(true) {    foo( );}")
+            assertEquals("while(true) {    foo( );}", formatter.applyChanges())
         }
 
         @Test
@@ -49,7 +193,15 @@ class TextWithChangesTest {
             val formatter = TextWithChanges("while     (true) { foo(); }")
             formatter.addChange(RangeInResult(PositionInResult.Unchanged(5u), PositionInResult.Unchanged(10u)), " ")
 
-            assertEquals(formatter.applyChanges(), "while (true) { foo(); }")
+            assertEquals("while (true) { foo(); }", formatter.applyChanges())
+        }
+
+        @Test
+        fun handlesWholeReplacement() {
+            val formatter = TextWithChanges("  ")
+            formatter.addChange(RangeInResult(PositionInResult.Unchanged(0u), PositionInResult.Unchanged(2u)), " ")
+
+            assertEquals(" ", formatter.applyChanges())
         }
     }
 }
