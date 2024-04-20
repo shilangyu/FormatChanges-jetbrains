@@ -75,6 +75,7 @@ class TextWithChanges(private val source: String) {
                 }
             }
 
+        // operate on normalized positions to reduce the amount of cases to consider
         val start = normalize(range.start)
         val end = normalize(range.end)
 
@@ -199,6 +200,7 @@ class TextWithChanges(private val source: String) {
                 SearchKind.BOTH -> matchBoth
             }
 
+        // given a found character we need to relativize it to the base offset of the segment
         fun computePosition(
             offset: UInt,
             baseOffset: PositionInResult,
@@ -278,6 +280,7 @@ class TextWithChanges(private val source: String) {
     }
 
     fun applyChanges(): String {
+        // we just iterate over changes by applying them and alternating with the original source
         val result = StringBuilder()
         var currentOffset = 0
         for (change in changes) {
@@ -293,11 +296,13 @@ class TextWithChanges(private val source: String) {
 
     private fun segmentsInRange(range: RangeInResult): Sequence<Segment> =
         sequence {
+            // there are quite a few possible paths, bare with me
             var current =
                 when (range.start) {
                     is PositionInResult.Changed -> {
                         when (range.end) {
                             is PositionInResult.Changed -> {
+                                // both start and end are within an existing change, if it's the same one yield it and exit
                                 if (range.start.change == range.end.change) {
                                     yield(
                                         Segment(
@@ -311,9 +316,11 @@ class TextWithChanges(private val source: String) {
                                     return@sequence
                                 }
                             }
+                            // left for exhaustiveness checks
                             is PositionInResult.Unchanged -> {}
                         }
 
+                        // it's a difference change, let's yield the rest of the current change and proceed
                         yield(
                             Segment(
                                 range.start.change.replacement.text.substring(range.start.offset.toInt()),
@@ -324,21 +331,28 @@ class TextWithChanges(private val source: String) {
                     }
                     is PositionInResult.Unchanged -> range.start.offset
                 }
+
+            // at this point `current` points to the beginning of a source segment
+            // in fact, after each iteration it will be in that spot
+
             // assuming `range` is correctly provided, this terminates
             // NOTE: this could be handled better (by upper bounding by the amount of changes)
             while (true) {
+                // find the closest change above the current position
                 val nextChange = changes.higher(TextChange.dummy(current))
 
                 when (range.end) {
                     is PositionInResult.Changed -> {
                         // nextChange should not be null here since end is a change
+                        // since end is a change, it is not an offset to the source. Thus, we yield the whole segment up
+                        // to the change
                         yield(
                             Segment(
                                 source.substring(current.toInt(), nextChange!!.range.start.toInt()),
                                 PositionInResult.Unchanged(current),
                             ),
                         )
-
+                        // exit condition 1: the end was a change, and we are that change now
                         if (nextChange == range.end.change) {
                             yield(
                                 Segment(
@@ -350,10 +364,12 @@ class TextWithChanges(private val source: String) {
                         }
                     }
                     is PositionInResult.Unchanged -> {
+                        // exit condition 2: the end was in the source, and we are in that segment now
                         if (nextChange == null || nextChange.range.start > range.end.offset) {
                             yield(Segment(source.substring(current.toInt(), range.end.offset.toInt()), PositionInResult.Unchanged(current)))
                             return@sequence
                         } else {
+                            // it is not the current source segment, consume it whole until the next change
                             yield(
                                 Segment(
                                     source.substring(current.toInt(), nextChange.range.start.toInt()),
@@ -364,6 +380,7 @@ class TextWithChanges(private val source: String) {
                     }
                 }
 
+                // at this point we yielded the source segment, and we are free to yield the change segment
                 yield(Segment(nextChange.replacement.text, PositionInResult.Changed(nextChange, 0u)))
                 current = nextChange.range.end
             }
